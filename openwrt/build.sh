@@ -20,30 +20,9 @@ endgroup() {
     GROUP=
 }
 
-# check
-if [ "$(whoami)" != "zhiern" ] && [ -z "$git_name" ] && [ -z "$git_password" ]; then
-    echo -e "\n${RED_COLOR} Not authorized. Execute the following command to provide authorization information:${RES}\n"
-    echo -e "${BLUE_COLOR} export git_name=your_username git_password=your_password${RES}\n"
-    exit 1
-fi
-
 #####################################
 #        OpenWrt Build Script       #
 #####################################
-
-# script url
-export mirror=https://init.kejizero.online
-
-# github actions - caddy server
-if [ "$(whoami)" = "runner" ] && [ "$git_name" != "zhao" ]; then
-    export mirror=http://127.0.0.1:8080
-fi
-
-# private gitea
-export gitea="git.kejizero.online"
-
-# github mirror
-export github="github.com"
 
 # Check root
 if [ "$(id -u)" = "0" ]; then
@@ -80,13 +59,16 @@ if [ "$1" = "dev" ]; then
     export branch=openwrt-24.10
     export version=dev
 elif [ "$1" = "v24" ]; then
-    latest_release="v$(curl -s $mirror/tags/v24)"
-    export branch=$latest_release
+    # 使用最新的稳定版本
+    export branch=openwrt-24.10
     export version=v24
+else
+    export branch=$1
+    export version=$1
 fi
 
 # lan
-[ -n "$LAN" ] && export LAN=$LAN || export LAN=10.0.0.1
+[ -n "$LAN" ] && export LAN=$LAN || export LAN=192.168.1.1
 
 # platform
 case "$2" in
@@ -101,16 +83,8 @@ case "$2" in
 esac
 export platform toolchain_arch
 
-# gcc14 & 15
-if [ "$USE_GCC13" = y ]; then
-    export USE_GCC13=y gcc_version=13
-elif [ "$USE_GCC14" = y ]; then
-    export USE_GCC14=y gcc_version=14
-elif [ "$USE_GCC15" = y ]; then
-    export USE_GCC15=y gcc_version=15
-else
-    export USE_GCC14=y gcc_version=14
-fi
+# gcc version (使用官方默认)
+export gcc_version=13
 
 # build.sh flags
 export \
@@ -125,17 +99,11 @@ case "$platform" in
         ;;
     rockchip)
         echo -e "${GREEN_COLOR}Model: rockchip${RES}"
-        [ "$1" = "v24" ] && model="rockchip"
         ;;
 esac
 
 # print build opt
-get_kernel_version=$(curl -s $mirror/tags/kernel-6.6)
-kmod_hash=$(echo -e "$get_kernel_version" | awk -F'HASH-' '{print $2}' | awk '{print $1}' | tail -1 | md5sum | awk '{print $1}')
-kmodpkg_name=$(echo $(echo -e "$get_kernel_version" | awk -F'HASH-' '{print $2}' | awk '{print $1}')~$(echo $kmod_hash)-r1)
-echo -e "${GREEN_COLOR}Kernel: $kmodpkg_name ${RES}"
 echo -e "${GREEN_COLOR}Date: $CURRENT_DATE${RES}\r\n"
-echo -e "${GREEN_COLOR}SCRIPT_URL:${RES} ${BLUE_COLOR}$mirror${RES}\r\n"
 echo -e "${GREEN_COLOR}GCC VERSION: $gcc_version${RES}"
 print_status() {
     local name="$1"
@@ -149,27 +117,23 @@ print_status() {
         echo -e "${GREEN_COLOR}${name}:${RES} ${false_color}false${RES}${newline}"
     fi
 }
-[ -n "$LAN" ] && echo -e "${GREEN_COLOR}LAN:${RES} $LAN" || echo -e "${GREEN_COLOR}LAN:${RES} 10.0.0.1"
+[ -n "$LAN" ] && echo -e "${GREEN_COLOR}LAN:${RES} $LAN" || echo -e "${GREEN_COLOR}LAN:${RES} 192.168.1.1"
 [ -n "$ROOT_PASSWORD" ] \
     && echo -e "${GREEN_COLOR}Default Password:${RES} ${BLUE_COLOR}$ROOT_PASSWORD${RES}" \
     || echo -e "${GREEN_COLOR}Default Password:${RES} (${YELLOW_COLOR}No password${RES})"
-[ "$ENABLE_GLIBC" = "y" ] && echo -e "${GREEN_COLOR}Standard C Library:${RES} ${BLUE_COLOR}glibc${RES}" || echo -e "${GREEN_COLOR}Standard C Library:${RES} ${BLUE_COLOR}musl${RES}"
-print_status "ENABLE_OTA"        "$ENABLE_OTA"
+echo -e "${GREEN_COLOR}Standard C Library:${RES} ${BLUE_COLOR}musl${RES}"
 print_status "ENABLE_BPF"        "$ENABLE_BPF" "$GREEN_COLOR" "$RED_COLOR"
-print_status "ENABLE_LTO"        "$ENABLE_LTO" "$GREEN_COLOR" "$RED_COLOR"
-print_status "ENABLE_LOCAL_KMOD" "$ENABLE_LOCAL_KMOD"
 print_status "BUILD_FAST"        "$BUILD_FAST" "$GREEN_COLOR" "$YELLOW_COLOR" "\n"
 
 # clean old files
-rm -rf openwrt master
+rm -rf openwrt
 
 # openwrt - releases
 [ "$(whoami)" = "runner" ] && group "source code"
-git clone --depth=1 https://$github/openwrt/openwrt -b $branch
+git clone --depth=1 https://github.com/openwrt/openwrt.git -b $branch
 
 if [ -d openwrt ]; then
     cd openwrt
-    curl -Os $mirror/openwrt/patch/key.tar.gz && tar zxf key.tar.gz && rm -f key.tar.gz
 else
     echo -e "${RED_COLOR}Failed to download source code${RES}"
     exit 1
@@ -177,29 +141,14 @@ fi
 
 # tags
 if [ "$1" = "v24" ]; then
-    git describe --abbrev=0 --tags > version.txt
+    git describe --abbrev=0 --tags > version.txt 2>/dev/null || echo "$branch" > version.txt
 else
-    git branch | awk '{print $2}' > version.txt
+    echo "$branch" > version.txt
 fi
 
-# feeds mirror
-if [ "$1" = "v24" ]; then
-    packages="^$(grep packages feeds.conf.default | awk -F^ '{print $2}')"
-    luci="^$(grep luci feeds.conf.default | awk -F^ '{print $2}')"
-    routing="^$(grep routing feeds.conf.default | awk -F^ '{print $2}')"
-    telephony="^$(grep telephony feeds.conf.default | awk -F^ '{print $2}')"
-else
-    packages=";$branch"
-    luci=";$branch"
-    routing=";$branch"
-    telephony=";$branch"
-fi
-cat > feeds.conf.default <<EOF
-src-git packages https://$github/openwrt/packages.git$packages
-src-git luci https://$github/openwrt/luci.git$luci
-src-git routing https://$github/openwrt/routing.git$routing
-src-git telephony https://$github/openwrt/telephony.git$telephony
-EOF
+# 使用官方 feeds 配置
+echo -e "\n${GREEN_COLOR}Using official feeds...${RES}\n"
+# 保持官方默认的 feeds.conf.default 不变
 
 # Init feeds
 [ "$(whoami)" = "runner" ] && group "feeds update -a"
@@ -216,106 +165,232 @@ if [ -f ../dl.gz ]; then
 fi
 
 ###############################################
-echo -e "\n${GREEN_COLOR}Patching ...${RES}\n"
+echo -e "\n${GREEN_COLOR}Preparing configuration ...${RES}\n"
 
-# scripts
-scripts=(
-  00-prepare_base.sh
-  01-prepare_package.sh
-  02-prepare_adguard_core.sh
-  03-preset_mihimo_core.sh
-  04-convert_translation.sh
-  06-fix-source.sh
-  10-custom.sh
-  99_clean_build_cache.sh
-)
-for script in "${scripts[@]}"; do
-  curl -sO "$mirror/openwrt/scripts/$script"
-done
-if [ "$platform" = "rockchip" ]; then
-    curl -sO "$mirror/openwrt/scripts/05-rockchip_target_only.sh"
-    export core=arm64
-    export opkg=aarch64_generic
-elif [ "$platform" = "x86_64" ]; then
-    curl -sO "$mirror/openwrt/scripts/05-x86_64_target_only.sh"
-    export core=amd64
-    export opkg=x86_64
-fi
-chmod 0755 *sh
-[ "$(whoami)" = "runner" ] && group "patching openwrt"
-bash 00-prepare_base.sh
-bash 01-prepare_package.sh
-bash 02-prepare_adguard_core.sh
-bash 03-preset_mihimo_core.sh
-#bash 04-convert_translation.sh
-bash 06-fix-source.sh
-if [ "$platform" = "rockchip" ]; then
-    bash 05-rockchip_target_only.sh
-elif [ "$platform" = "x86_64" ]; then
-    bash 05-x86_64_target_only.sh
-fi
-[ -f "10-custom.sh" ] && bash 10-custom.sh
-find feeds -type f -name "*.orig" -exec rm -f {} \;
-[ "$(whoami)" = "runner" ] && endgroup
-
-rm -f 0*-*.sh 10-custom.sh
-rm -rf ../master
-
-# Load devices Config
+# 基础配置 - 针对不同平台
 if [ "$platform" = "x86_64" ]; then
-    curl -s $mirror/openwrt/24-config-musl-x86 > .config
+    cat > .config <<EOF
+CONFIG_TARGET_x86=y
+CONFIG_TARGET_x86_64=y
+CONFIG_TARGET_x86_64_DEVICE_generic=y
+
+# 文件系统
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_ROOTFS_EXT4FS=y
+CONFIG_TARGET_EXT4_RESERVED_PCT=0
+CONFIG_TARGET_EXT4_BLOCKSIZE_4K=y
+CONFIG_TARGET_ROOTFS_PARTSIZE=512
+CONFIG_TARGET_KERNEL_PARTSIZE=64
+
+# 镜像格式
+CONFIG_TARGET_IMAGES_GZIP=y
+CONFIG_GRUB_IMAGES=y
+CONFIG_GRUB_EFI_IMAGES=y
+CONFIG_VDI_IMAGES=y
+CONFIG_VMDK_IMAGES=y
+
+# 网络
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-ssl=y
+CONFIG_PACKAGE_luci-app-firewall=y
+CONFIG_PACKAGE_luci-app-adblock=y
+CONFIG_PACKAGE_luci-app-ddns=y
+CONFIG_PACKAGE_luci-app-upnp=y
+CONFIG_PACKAGE_luci-app-sqm=y
+CONFIG_PACKAGE_luci-app-nlbwmon=y
+
+# 基础软件包
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_wget-ssl=y
+CONFIG_PACKAGE_nano=y
+CONFIG_PACKAGE_htop=y
+CONFIG_PACKAGE_iperf3=y
+CONFIG_PACKAGE_tcpdump=y
+CONFIG_PACKAGE_ethtool=y
+
+# USB 支持
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-usb2=y
+CONFIG_PACKAGE_kmod-usb3=y
+CONFIG_PACKAGE_kmod-fs-ext4=y
+CONFIG_PACKAGE_kmod-fs-ntfs3=y
+CONFIG_PACKAGE_kmod-fs-vfat=y
+CONFIG_PACKAGE_block-mount=y
+
+# 无线支持
+CONFIG_PACKAGE_kmod-cfg80211=y
+CONFIG_PACKAGE_kmod-mac80211=y
+CONFIG_PACKAGE_wpad-openssl=y
+CONFIG_PACKAGE_hostapd-common=y
+CONFIG_PACKAGE_iw=y
+CONFIG_PACKAGE_iwinfo=y
+
+# PPP 支持
+CONFIG_PACKAGE_ppp=y
+CONFIG_PACKAGE_ppp-mod-pppoe=y
+CONFIG_PACKAGE_kmod-pppoe=y
+
+EOF
+
 elif [ "$platform" = "rockchip" ]; then
-    curl -s $mirror/openwrt/24-config-musl-rockchip > .config
+    cat > .config <<EOF
+CONFIG_TARGET_rockchip=y
+CONFIG_TARGET_rockchip_armv8=y
+CONFIG_TARGET_MULTI_PROFILE=y
+
+# 选择支持的设备
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_friendlyarm_nanopi-r2c=y
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_friendlyarm_nanopi-r2s=y
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_friendlyarm_nanopi-r4s=y
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_friendlyarm_nanopi-r5c=y
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_friendlyarm_nanopi-r5s=y
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_friendlyarm_nanopi-r6c=y
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_friendlyarm_nanopi-r6s=y
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_radxa_rock-5a=y
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_radxa_rock-5b=y
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_xunlong_orangepi-5=y
+CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_xunlong_orangepi-5-plus=y
+
+# 文件系统
+CONFIG_TARGET_ROOTFS_SQUASHFS=y
+CONFIG_TARGET_ROOTFS_EXT4FS=y
+CONFIG_TARGET_EXT4_RESERVED_PCT=0
+CONFIG_TARGET_EXT4_BLOCKSIZE_4K=y
+CONFIG_TARGET_ROOTFS_PARTSIZE=512
+
+# 镜像格式
+CONFIG_TARGET_IMAGES_GZIP=y
+
+# 网络
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-ssl=y
+CONFIG_PACKAGE_luci-app-firewall=y
+CONFIG_PACKAGE_luci-app-adblock=y
+CONFIG_PACKAGE_luci-app-ddns=y
+CONFIG_PACKAGE_luci-app-upnp=y
+CONFIG_PACKAGE_luci-app-sqm=y
+CONFIG_PACKAGE_luci-app-nlbwmon=y
+
+# 基础软件包
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_wget-ssl=y
+CONFIG_PACKAGE_nano=y
+CONFIG_PACKAGE_htop=y
+CONFIG_PACKAGE_iperf3=y
+CONFIG_PACKAGE_tcpdump=y
+CONFIG_PACKAGE_ethtool=y
+
+# USB 支持
+CONFIG_PACKAGE_kmod-usb-storage=y
+CONFIG_PACKAGE_kmod-usb2=y
+CONFIG_PACKAGE_kmod-usb3=y
+CONFIG_PACKAGE_kmod-fs-ext4=y
+CONFIG_PACKAGE_kmod-fs-ntfs3=y
+CONFIG_PACKAGE_kmod-fs-vfat=y
+CONFIG_PACKAGE_block-mount=y
+
+# 无线支持
+CONFIG_PACKAGE_kmod-cfg80211=y
+CONFIG_PACKAGE_kmod-mac80211=y
+CONFIG_PACKAGE_wpad-openssl=y
+CONFIG_PACKAGE_hostapd-common=y
+CONFIG_PACKAGE_iw=y
+CONFIG_PACKAGE_iwinfo=y
+
+# PPP 支持
+CONFIG_PACKAGE_ppp=y
+CONFIG_PACKAGE_ppp-mod-pppoe=y
+CONFIG_PACKAGE_kmod-pppoe=y
+
+EOF
 fi
 
-# config-common
-curl -s $mirror/openwrt/24-config-common >> .config
+# 通用配置
+cat >> .config <<EOF
 
-# ota
-[ "$ENABLE_OTA" = "y" ] && [ "$version" = "v24" ] && echo 'CONFIG_PACKAGE_luci-app-ota=y' >> .config
+# 语言包
+CONFIG_LUCI_LANG_zh_Hans=y
 
-# bpf
-[ "$ENABLE_BPF" = "y" ] && curl -s $mirror/openwrt/generic/config-bpf >> .config
+# 主题
+CONFIG_PACKAGE_luci-theme-bootstrap=y
 
-# LTO
-export ENABLE_LTO=$ENABLE_LTO
-[ "$ENABLE_LTO" = "y" ] && curl -s $mirror/openwrt/generic/config-lto >> .config
+# SSL 证书
+CONFIG_PACKAGE_ca-certificates=y
 
-# not all kmod
-[ "$NO_KMOD" = "y" ] && sed -i '/CONFIG_ALL_KMODS=y/d' .config
+# 时间同步
+CONFIG_PACKAGE_ntpd=y
 
-# uhttpd
-[ "$ENABLE_UHTTPD" = "y" ] && sed -i '/nginx/d' .config && echo 'CONFIG_PACKAGE_ariang=y' >> .config
+# IPv6 支持
+CONFIG_PACKAGE_ipv6helper=y
+CONFIG_PACKAGE_odhcp6c=y
+CONFIG_PACKAGE_odhcpd-ipv6only=y
 
-# local kmod
-if [ "$ENABLE_LOCAL_KMOD" = "y" ]; then
-    echo -e "\n# local kmod" >> .config
-    echo "CONFIG_TARGET_ROOTFS_LOCAL_PACKAGES=y" >> .config
+# 防火墙增强
+CONFIG_PACKAGE_iptables-mod-extra=y
+CONFIG_PACKAGE_iptables-mod-nat-extra=y
+
+# 网络工具
+CONFIG_PACKAGE_dnsmasq-full=y
+CONFIG_PACKAGE_dropbear=y
+
+EOF
+
+# BPF 支持
+if [ "$ENABLE_BPF" = "y" ]; then
+    cat >> .config <<EOF
+
+# BPF 支持
+CONFIG_KERNEL_BPF=y
+CONFIG_KERNEL_XDP_SOCKETS=y
+CONFIG_PACKAGE_kmod-xdp-sockets-diag=y
+CONFIG_BPF_TOOLCHAIN_HOST=y
+
+EOF
 fi
 
-# gcc15 patches
-[ "$(whoami)" = "runner" ] && group "patching toolchain"
-curl -s $mirror/openwrt/patch/gcc/200-toolchain-gcc-add-support-for-GCC-15.patch | patch -p1
+# 设置密码
+if [ -n "$ROOT_PASSWORD" ]; then
+    echo "CONFIG_TARGET_PREINIT_DISABLE_FAILSAFE=y" >> .config
+    echo "CONFIG_TARGET_PREINIT_SUPPRESS_STDERR=y" >> .config
+fi
 
-# gcc config
-echo -e "\n# gcc ${gcc_version}" >> .config
-echo -e "CONFIG_DEVEL=y" >> .config
-echo -e "CONFIG_TOOLCHAINOPTS=y" >> .config
-echo -e "CONFIG_GCC_USE_VERSION_${gcc_version}=y\n" >> .config
-[ "$(whoami)" = "runner" ] && endgroup
+# 移除一些不需要的包来减小体积
+cat >> .config <<EOF
 
-# Toolchain Cache
-if [ "$BUILD_FAST" = "y" ]; then
-    echo -e "\n${GREEN_COLOR}Download Toolchain ...${RES}"
-    [ -f /etc/os-release ] && source /etc/os-release
-    TOOLCHAIN_URL=https://github.com/zhiern/openwrt_caches/releases/download/openwrt-24.10
-    curl -L ${TOOLCHAIN_URL}/toolchain_musl_${toolchain_arch}_gcc-${gcc_version}.tar.zst -o toolchain.tar.zst $CURL_BAR
-    echo -e "\n${GREEN_COLOR}Process Toolchain ...${RES}"
-    tar -I "zstd" -xf toolchain.tar.zst
-    rm -f toolchain.tar.zst
-    mkdir bin
-    find ./staging_dir/ -name '*' -exec touch {} \; >/dev/null 2>&1
-    find ./tmp/ -name '*' -exec touch {} \; >/dev/null 2>&1
+# 移除一些默认包
+# CONFIG_PACKAGE_ppp is not set
+# CONFIG_PACKAGE_ppp-mod-pppoe is not set
+
+EOF
+
+# 自定义网络配置
+if [ -n "$LAN" ] && [ "$LAN" != "192.168.1.1" ]; then
+    mkdir -p files/etc/config
+    cat > files/etc/config/network <<EOF
+config interface 'loopback'
+        option ifname 'lo'
+        option proto 'static'
+        option ipaddr '127.0.0.1'
+        option netmask '255.0.0.0'
+
+config globals 'globals'
+        option ula_prefix 'fd12:3456:789a::/48'
+
+config interface 'lan'
+        option type 'bridge'
+        option ifname 'eth0'
+        option proto 'static'
+        option ipaddr '$LAN'
+        option netmask '255.255.255.0'
+        option ip6assign '60'
+
+EOF
+fi
+
+# 设置root密码
+if [ -n "$ROOT_PASSWORD" ]; then
+    mkdir -p files/etc
+    echo "root:$(openssl passwd -1 "$ROOT_PASSWORD")" > files/etc/shadow
 fi
 
 # init openwrt config
@@ -327,19 +402,8 @@ else
 fi
 
 # Compile
-if [ "$BUILD_TOOLCHAIN" = "y" ]; then
-    echo -e "\r\n${GREEN_COLOR}Building Toolchain ...${RES}\r\n"
-    make -j$cores toolchain/compile || make -j$cores toolchain/compile V=s || exit 1
-    mkdir -p toolchain-cache
-    tar -I "zstd -19 -T$(nproc --all)" -cf toolchain-cache/toolchain_musl_${toolchain_arch}_gcc-${gcc_version}.tar.zst ./{build_dir,dl,staging_dir,tmp}
-    echo -e "\n${GREEN_COLOR} Build success! ${RES}"
-    exit 0
-else
-    echo -e "\r\n${GREEN_COLOR}Building OpenWrt ...${RES}\r\n"
-    sed -i "/BUILD_DATE/d" package/base-files/files/usr/lib/os-release
-    sed -i "/BUILD_ID/aBUILD_DATE=\"$CURRENT_DATE\"" package/base-files/files/usr/lib/os-release
-    make -j$cores IGNORE_ERRORS="n m"
-fi
+echo -e "\r\n${GREEN_COLOR}Building OpenWrt ...${RES}\r\n"
+make -j$cores || make -j1 V=s
 
 # Compile time
 endtime=`date +'%Y-%m-%d %H:%M:%S'`
@@ -350,6 +414,10 @@ SEC=$((end_seconds-start_seconds));
 if [ -f bin/targets/*/*/sha256sums ]; then
     echo -e "${GREEN_COLOR} Build success! ${RES}"
     echo -e " Build time: $(( SEC / 3600 ))h,$(( (SEC % 3600) / 60 ))m,$(( (SEC % 3600) % 60 ))s"
+    
+    # 显示生成的文件
+    echo -e "\n${GREEN_COLOR}Generated files:${RES}"
+    find bin/targets -name "*.img.gz" -o -name "*.bin" -o -name "*.ubi" | head -10
 else
     echo -e "\n${RED_COLOR} Build error... ${RES}"
     echo -e " Build time: $(( SEC / 3600 ))h,$(( (SEC % 3600) / 60 ))m,$(( (SEC % 3600) % 60 ))s"
@@ -357,223 +425,5 @@ else
     exit 1
 fi
 
-if [ "$platform" = "x86_64" ]; then
-    if [ "$NO_KMOD" != "y" ]; then
-        mkdir kmodpkg
-        cp -a bin/targets/x86/*/packages $kmodpkg_name/
-        rm -f kmodpkg/Packages*
-        cp -a bin/packages/x86_64/base/rtl88*a-firmware*.ipk $kmodpkg_name/
-        cp -a bin/packages/x86_64/base/natflow*.ipk $kmodpkg_name/
-        bash kmod-sign $kmodpkg_name
-        tar zcf x86_64-$kmodpkg_name.tar.gz $kmodpkg_name
-        rm -rf $kmodpkg_name
-    fi
-    # OTA json
-    if [ "$1" = "v24" ]; then
-        mkdir -p ota
-        OTA_URL="https://github.com/zhiern/ZeroWrt/releases/download"
-        VERSION=$(sed 's/v//g' version.txt)
-        SHA256=$(sha256sum bin/targets/x86/64*/*-generic-squashfs-combined-efi.img.gz | awk '{print $1}')
-        cat > ota/x86_64.json <<EOF
-{
-  "x86_64": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-x86-64-generic-squashfs-combined-efi.img.gz"
-    }
-  ]
-}
-EOF
-    fi
-elif [ "$platform" = "rockchip" ]; then
-    if [ "$NO_KMOD" != "y" ]; then
-        mkdir kmodpkg
-        cp -a bin/targets/rockchip/armv8*/packages $kmodpkg_name
-        rm -f kmodpkg/Packages*
-        cp -a bin/packages/aarch64_generic/base/rtl88*-firmware*.ipk $kmodpkg_name/
-        cp -a bin/packages/aarch64_generic/base/natflow*.ipk $kmodpkg_name/
-        bash kmod-sign $kmodpkg_name
-        tar zcf armv8-$kmodpkg_name.tar.gz $kmodpkg_name
-        rm -rf $kmodpkg_name
-    fi
-    # OTA json
-    if [ "$1" = "v24" ]; then
-        mkdir -p ota
-        OTA_URL="https://github.com/zhiern/ZeroWrt/releases/download"
-        VERSION=$(sed 's/v//g' version.txt)
-        SHA256_armsom_sige3=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-armsom_sige3-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_armsom_sige7=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-armsom_sige7-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_t4=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopc-t4-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_t6=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopc-t6-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r2c_plus=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopi-r2c-plus-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r2c=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopi-r2c-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r2s=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopi-r2s-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r3s=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopi-r3s-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r4s=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r4se=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopi-r4se-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r5c=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopi-r5c-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r5s=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopi-r5s-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r6c=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopi-r6c-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r6s=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-friendlyarm_nanopi-r6s-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_huake_guangmiao_g4c=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-huake_guangmiao-g4c-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r66s=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-lunzn_fastrhino-r66s-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_r68s=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-lunzn_fastrhino-r68s-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_radxa_rock_5a=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-radxa_rock-5a-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_radxa_rock_5b=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-radxa_rock-5b-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_xunlong_orangepi_5_plus=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-xunlong_orangepi-5-plus-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        SHA256_xunlong_orangepi_5=$(sha256sum bin/targets/rockchip/armv8*/openwrt-24.10.2-rockchip-armv8-xunlong_orangepi-5-squashfs-sysupgrade.img.gz | awk '{print $1}')
-        cat > ota/rockchip.json <<EOF
-{
-  "armsom,sige3": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_armsom_sige3",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-armsom_sige3-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "armsom,sige7": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_armsom_sige7",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-armsom_sige7-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopc-t4": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_t4",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopc-t4-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopc-t6": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_t6",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopc-t6-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopi-r2c-plus": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r2c_plus",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopi-r2c-plus-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopi-r2c": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r2c",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopi-r2c-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopi-r2s": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r2s",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopi-r2s-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopi-r3s": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r3s",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopi-r3s-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopi-r4s": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r4s",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopi-r4s-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopi-r4se": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r4se",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopi-r4se-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopi-r5c": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r5c",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopi-r5c-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopi-r5s": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r5s",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopi-r5s-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopi-r6c": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r6c",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopi-r6c-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "friendlyarm,nanopi-r6s": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r6s",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-friendlyarm_nanopi-r6s-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "huake,guangmiao-g4c": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_huake_guangmiao_g4c",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-huake_guangmiao-g4c-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "lunzn,fastrhino-r66s": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r66s",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-lunzn_fastrhino-r66s-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "lunzn,fastrhino-r68s": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_r68s",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-lunzn_fastrhino-r68s-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "radxa,rock-5a": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_radxa_rock_5a",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-radxa_rock-5a-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "radxa,rock-5b": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_radxa_rock_5b",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-radxa_rock-5b-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "xunlong,orangepi-5-plus": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_xunlong_orangepi_5_plus",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-xunlong_orangepi-5-plus-squashfs-sysupgrade.img.gz"
-    }
-  ],
-  "xunlong,orangepi-5": [
-    {
-      "build_date": "$CURRENT_DATE",
-      "sha256sum": "$SHA256_xunlong_orangepi_5",
-      "url": "$OTA_URL/OpenWrt-v$VERSION/openwrt-$VERSION-rockchip-armv8-xunlong_orangepi-5-squashfs-sysupgrade.img.gz"
-    }
-  ]
-}
-EOF
-    fi
-fi        
-### People come and go, we struggled with laughter and tears,and all the years have gone by,still Ihave you by my side. 你陪了我多少年，花开花落。一路上起起跌跌 ###
+echo -e "\n${GREEN_COLOR}Build completed successfully!${RES}"
+echo -e "Firmware images are located in: ${BLUE_COLOR}bin/targets/*/64/${RES}"
